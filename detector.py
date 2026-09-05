@@ -263,6 +263,10 @@ class DepthOccupancyEstimator:
             return self._last_obstacles
         self._last_created_at = observation.created_at
 
+        if observation.depth.size == 0:
+            self._last_obstacles = []
+            return self._last_obstacles
+
         grid = cv2.resize(
             observation.depth,
             (DEPTH_GRID_COLS, DEPTH_GRID_ROWS),
@@ -389,6 +393,47 @@ def fuse_lane_occupancy(
         lane: yolo_lanes.get(lane, False) or depth_lanes.get(lane, False)
         for lane in LANES
     }
+
+
+@dataclass(frozen=True)
+class NavigationDecision:
+    lanes: dict[str, bool]
+    route: str
+    reason: str | None
+    source: str | None
+
+
+def navigate(
+    detections: list[Detection],
+    depth_obstacles: list[DepthObstacle],
+    depth_fresh: bool,
+    too_dark: bool,
+) -> NavigationDecision:
+    """Fuse YOLO labels and depth occupancy into one navigation decision.
+
+    Safety comes from depth occupancy, the human-readable reason from YOLO.
+    A stale or missing depth map silently degrades to the YOLO-only mode."""
+    yolo_lanes = lane_occupancy(detections)
+    depth_lanes = (
+        depth_lane_occupancy(depth_obstacles) if depth_fresh and not too_dark else {}
+    )
+    lanes = fuse_lane_occupancy(yolo_lanes, depth_lanes)
+    route = "BLOCKED" if too_dark else choose_route(lanes)
+
+    dangerous = [item for item in detections if item.dangerous]
+    yolo_reason = dangerous[0].label if dangerous else None
+    depth_center = depth_lanes.get("center", False)
+    if too_dark:
+        reason, source = "camera_dark", None
+    elif depth_center and yolo_reason:
+        reason, source = yolo_reason, "depth + yolo"
+    elif depth_center:
+        reason, source = "unknown_obstacle", "depth"
+    elif yolo_reason:
+        reason, source = yolo_reason, "yolo"
+    else:
+        reason, source = None, None
+    return NavigationDecision(lanes=lanes, route=route, reason=reason, source=source)
 
 
 def choose_route(lanes: dict[str, bool]) -> str:

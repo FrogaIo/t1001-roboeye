@@ -11,7 +11,11 @@ import torch.nn.functional as F
 from PIL import Image
 from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 
-from config import DEPTH_INTERVAL_SECONDS, DEPTH_MODEL_ID
+from config import (
+    DEPTH_INTERVAL_SECONDS,
+    DEPTH_MAX_AGE_SECONDS,
+    DEPTH_MODEL_ID,
+)
 
 
 logger = logging.getLogger("roboeye.depth")
@@ -29,6 +33,14 @@ class DepthObservation:
 
     def age_seconds(self, now: float) -> float:
         return now - self.created_at
+
+
+def observation_is_fresh(observation: DepthObservation | None, now: float) -> bool:
+    """A depth map older than DEPTH_MAX_AGE_SECONDS is never fresh evidence."""
+    return (
+        observation is not None
+        and observation.age_seconds(now) <= DEPTH_MAX_AGE_SECONDS
+    )
 
 
 class DepthDetector:

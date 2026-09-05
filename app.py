@@ -16,7 +16,6 @@ from config import (
     CLEAR_FRAMES_REQUIRED,
     DARK_FRAME_MEAN_THRESHOLD,
     DEFAULT_CAMERA_PITCH_DEGREES,
-    DEPTH_MAX_AGE_SECONDS,
     DISPLAY_NAMES,
 )
 from detector import (
@@ -24,15 +23,12 @@ from detector import (
     DepthObstacle,
     DepthOccupancyEstimator,
     ObjectDetector,
-    choose_route,
-    depth_lane_occupancy,
-    depth_lane_scores,
     draw_result,
-    fuse_lane_occupancy,
-    lane_occupancy,
+    depth_lane_scores,
+    navigate,
     perspective_for_pitch,
 )
-from depth_detector import DepthTracker
+from depth_detector import DepthTracker, observation_is_fresh
 from journal import EventJournal
 
 
@@ -183,33 +179,12 @@ def process_frame(
                 latest_depth_at = time.monotonic()
                 latest_preview_created_at = depth.created_at
 
-    yolo_lanes = lane_occupancy(detections)
-    depth_fresh = (
-        depth is not None
-        and depth.age_seconds(time.monotonic()) <= DEPTH_MAX_AGE_SECONDS
-    )
-    depth_lanes = depth_lane_occupancy(depth_obstacles) if depth_fresh else {}
-    lanes = fuse_lane_occupancy(yolo_lanes, depth_lanes)
-    route = "BLOCKED" if too_dark else choose_route(lanes)
-
-    dangerous = [item for item in detections if item.dangerous]
-    yolo_reason = dangerous[0].label if dangerous else None
-    depth_center = depth_lanes.get("center", False)
-    if too_dark:
-        danger_reason = "camera_dark"
-        source = None
-    elif depth_center and yolo_reason:
-        danger_reason = yolo_reason
-        source = "depth + yolo"
-    elif depth_center:
-        danger_reason = "unknown_obstacle"
-        source = "depth"
-    elif yolo_reason:
-        danger_reason = yolo_reason
-        source = "yolo"
-    else:
-        danger_reason = None
-        source = None
+    depth_fresh = observation_is_fresh(depth, time.monotonic())
+    navigation = navigate(detections, depth_obstacles, depth_fresh, too_dark)
+    lanes = navigation.lanes
+    route = navigation.route
+    danger_reason = navigation.reason
+    source = navigation.source
     decision = decision_filter.update(danger_reason)
     processed = draw_result(frame, detections, decision, lanes, route, perspective)
 
