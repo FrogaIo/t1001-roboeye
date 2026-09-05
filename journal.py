@@ -40,12 +40,17 @@ class EventJournal:
         route: str,
         detections: list[dict[str, object]],
         annotated_jpeg: bytes,
+        depth_jpeg: bytes | None = None,
     ) -> dict[str, object]:
         now = datetime.now().astimezone()
         incident_name: str | None = None
+        depth_name: str | None = None
         if current == "STOP":
             incident_name = f"incident-{now.strftime('%Y%m%d-%H%M%S-%f')}.jpg"
             (self.incident_dir / incident_name).write_bytes(annotated_jpeg)
+            if depth_jpeg:
+                depth_name = incident_name.replace(".jpg", "-depth.jpg")
+                (self.incident_dir / depth_name).write_bytes(depth_jpeg)
 
         event: dict[str, object] = {
             "timestamp": now.isoformat(timespec="seconds"),
@@ -63,6 +68,7 @@ class EventJournal:
                 for item in detections
             ],
             "incident": incident_name,
+            "depth_incident": depth_name,
         }
 
         with self._lock:

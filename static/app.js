@@ -9,6 +9,7 @@ const pingLabel = document.querySelector("#ping");
 const robotStateLabel = document.querySelector("#robotState");
 const reasonLabel = document.querySelector("#reason");
 const routeLabel = document.querySelector("#route");
+const sourceLabel = document.querySelector("#source");
 
 const captureContext = capture.getContext("2d", { alpha: false });
 const overlayContext = overlay.getContext("2d");
@@ -103,6 +104,24 @@ function normalizedPoint(point, rect) {
   };
 }
 
+function drawDepthObstacles(result, rect) {
+  const obstacles = result.depth && result.depth.obstacles;
+  if (!obstacles || !obstacles.length) return;
+  overlayContext.setLineDash([9, 6]);
+  for (const obstacle of obstacles) {
+    const [x1, y1, x2, y2] = obstacle.box;
+    const x = rect.x + x1 * rect.width;
+    const y = rect.y + y1 * rect.height;
+    const boxWidth = (x2 - x1) * rect.width;
+    const boxHeight = (y2 - y1) * rect.height;
+    overlayContext.strokeStyle = "#ffb020";
+    overlayContext.lineWidth = 3;
+    overlayContext.strokeRect(x, y, boxWidth, boxHeight);
+    drawLabel(`DEPTH ${obstacle.score}`, x, y + boxHeight + 23, "#ffb020");
+  }
+  overlayContext.setLineDash([]);
+}
+
 function drawResult(result) {
   resizeOverlay();
   const width = overlay.clientWidth;
@@ -160,6 +179,8 @@ function drawResult(result) {
     );
   }
 
+  drawDepthObstacles(result, rect);
+
   const routeLane = { LEFT: 0, STRAIGHT: 1, RIGHT: 2 }[result.route];
   const startX = (bottomLeft.x + bottomRight.x) / 2;
   const startY = bottomLeft.y - 18;
@@ -204,6 +225,9 @@ function drawResult(result) {
   robotStateLabel.textContent = result.state;
   reasonLabel.textContent = result.reason_display || "путь свободен";
   routeLabel.textContent = `маршрут ${result.route}`;
+  sourceLabel.textContent = result.source
+    ? `источник ${result.source.toUpperCase()}`
+    : "источник —";
 }
 
 async function sendFrame() {
@@ -323,6 +347,7 @@ stopButton.addEventListener("click", () => {
   robotStateLabel.textContent = "—";
   reasonLabel.textContent = "ожидание";
   routeLabel.textContent = "маршрут —";
+  sourceLabel.textContent = "источник —";
   pingLabel.textContent = "PING —";
   stopButton.hidden = true;
   startButton.disabled = false;

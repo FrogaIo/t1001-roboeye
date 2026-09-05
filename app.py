@@ -48,6 +48,11 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 latest_processed_frame: bytes | None = None
 latest_status: dict[str, object] | None = None
 latest_processed_at = 0.0
+latest_rgb_frame: bytes | None = None
+latest_rgb_at = 0.0
+latest_depth_preview: bytes | None = None
+latest_depth_at = 0.0
+latest_preview_created_at: float | None = None
 
 detector = ObjectDetector()
 depth_tracker = DepthTracker()
@@ -76,6 +81,28 @@ async def latest_frame() -> Response:
     )
 
 
+@app.get("/rgb.jpg")
+async def rgb_frame() -> Response:
+    if latest_rgb_frame is None or time.monotonic() - latest_rgb_at > 2.0:
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
+    return Response(
+        content=latest_rgb_frame,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+@app.get("/depth.jpg")
+async def depth_view() -> Response:
+    if latest_depth_preview is None or time.monotonic() - latest_depth_at > 2.0:
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
+    return Response(
+        content=latest_depth_preview,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
 @app.get("/api/status")
 async def current_status() -> JSONResponse:
     connected = latest_status is not None and time.monotonic() - latest_processed_at <= 2.0
@@ -99,11 +126,30 @@ async def incident(filename: str) -> FileResponse:
     return FileResponse(path, media_type="image/jpeg")
 
 
+def render_depth_preview(depth: np.ndarray) -> bytes | None:
+    """Small turbo-colored relative depth preview for monitor diagnostics."""
+    height, width = depth.shape
+    scale = 320 / max(height, width, 1)
+    small = cv2.resize(
+        depth,
+        (max(1, int(width * scale)), max(1, int(height * scale))),
+        interpolation=cv2.INTER_AREA,
+    )
+    low, high = np.percentile(small, (2, 98))
+    normalized = np.clip((small - low) / max(high - low, 1e-6), 0, 1)
+    colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
+    ok, encoded = cv2.imencode(".jpg", colored, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    return encoded.tobytes() if ok else None
+
+
 def process_frame(
     jpeg: bytes,
     decision_filter: DecisionFilter,
     pitch_degrees: float | None = None,
 ) -> tuple[bytes, dict[str, object]] | None:
+    global latest_rgb_frame, latest_rgb_at, latest_depth_preview, latest_depth_at
+    global latest_preview_created_at
+
     started_at = time.perf_counter()
     frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
     if frame is None:
@@ -113,6 +159,12 @@ def process_frame(
     if width > 720:
         scale = 720 / width
         frame = cv2.resize(frame, (720, int(height * scale)))
+    height, width = frame.shape[:2]
+
+    ok, rgb_jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 62])
+    if ok:
+        latest_rgb_frame = rgb_jpeg.tobytes()
+        latest_rgb_at = time.monotonic()
 
     perspective = perspective_for_pitch(pitch_degrees)
     too_dark = float(frame.mean()) < DARK_FRAME_MEAN_THRESHOLD
@@ -124,6 +176,12 @@ def process_frame(
             depth_obstacles = depth_estimator.update(depth, width, height, perspective)
         except Exception:
             logger.exception("[depth] occupancy failed; continuing YOLO-only")
+        if depth.created_at != latest_preview_created_at:
+            preview = render_depth_preview(depth.depth)
+            if preview is not None:
+                latest_depth_preview = preview
+                latest_depth_at = time.monotonic()
+                latest_preview_created_at = depth.created_at
 
     yolo_lanes = lane_occupancy(detections)
     depth_fresh = (
@@ -282,6 +340,7 @@ async def camera_round_trip(websocket: WebSocket) -> None:
                     route=str(payload["route"]),
                     detections=detections,
                     annotated_jpeg=processed,
+                    depth_jpeg=latest_depth_preview,
                 )
                 logger.info(
                     "[state] %s -> %s reason=%s route=%s incident=%s",
