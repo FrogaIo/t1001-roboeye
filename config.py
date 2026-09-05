@@ -41,6 +41,12 @@ IOU_THRESHOLD = 0.45
 INFERENCE_SIZE = 640
 MAX_DETECTIONS = 24
 
+# Monocular depth. The model outputs RELATIVE depth: values are unitless and
+# higher value means a CLOSER surface (verified experimentally in
+# depth_smoke.py). Never interpret them as metres.
+DEPTH_MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
+DEPTH_INTERVAL_SECONDS = 0.5
+
 MIN_CLOSE_HEIGHT_RATIO = 0.18
 # Perspective is derived from the phone accelerometer. The fallback occupies
 # roughly the lower third of the image when motion access is unavailable.

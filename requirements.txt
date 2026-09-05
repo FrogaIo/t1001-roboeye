@@ -2,5 +2,8 @@ fastapi>=0.116,<1
 clip @ git+https://github.com/ultralytics/CLIP.git@a13192f8cb767260d7dfd98c843b0716593169e7
 numpy>=2,<3
 opencv-python>=4.12,<5
+pillow>=11,<14
+safetensors>=0.4,<1
+transformers>=4.45,<6
 ultralytics>=8.4,<9
 uvicorn[standard]>=0.35,<1

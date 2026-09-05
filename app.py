@@ -26,6 +26,7 @@ from detector import (
     lane_occupancy,
     perspective_for_pitch,
 )
+from depth_detector import DepthTracker
 from journal import EventJournal
 
 
@@ -43,6 +44,7 @@ latest_status: dict[str, object] | None = None
 latest_processed_at = 0.0
 
 detector = ObjectDetector()
+depth_tracker = DepthTracker()
 journal = EventJournal(ROOT)
 
 
@@ -108,6 +110,7 @@ def process_frame(
     perspective = perspective_for_pitch(pitch_degrees)
     too_dark = float(frame.mean()) < DARK_FRAME_MEAN_THRESHOLD
     detections = [] if too_dark else detector.detect(frame, perspective)
+    depth = depth_tracker.observe(frame)
     lanes = lane_occupancy(detections)
     route = "BLOCKED" if too_dark else choose_route(lanes)
 
@@ -137,6 +140,13 @@ def process_frame(
             "bottom_left": [perspective.bottom_left, 1.0],
         },
         "transition_from": decision.changed_from,
+        "depth": {
+            "available": depth is not None,
+            "age_ms": (
+                int(depth.age_seconds(time.monotonic()) * 1000) if depth else None
+            ),
+            "inference_ms": depth.inference_ms if depth else None,
+        },
         "detections": [
             {
                 "label": item.label,
