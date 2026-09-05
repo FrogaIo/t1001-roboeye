@@ -1,5 +1,5 @@
 # Python environments and caches
-.venv/
+.venv*/
 venv/
 env/
 __pycache__/
@@ -26,6 +26,7 @@ certs/
 # Runtime data generated on the Mac
 logs/
 incidents/
+depth-preview.*
 
 # Editors and operating systems
 .DS_Store
