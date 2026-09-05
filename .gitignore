@@ -29,6 +29,12 @@ incidents/
 sample.jpg
 depth-preview.*
 
+# Godot generated data
+godot/.godot/
+godot/export/
+godot/logs/
+godot/screenshots/
+
 # Editors and operating systems
 .DS_Store
 .idea/

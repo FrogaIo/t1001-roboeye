@@ -145,3 +145,8 @@ uvicorn app:app --host 0.0.0.0 --port 8443 \
   телефоне.
 - Сетка не меняется: разрешите доступ к движению; текущий угол отображается на
   панели Mac.
+
+## Дальнейшие планы
+
+- [Интеграция monocular depth](DEPTH_PLAN.md)
+- [Симулятор и vision-assisted робот в Godot](GODOT_PLAN.md)
