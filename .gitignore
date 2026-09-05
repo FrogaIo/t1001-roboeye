@@ -26,6 +26,7 @@ certs/
 # Runtime data generated on the Mac
 logs/
 incidents/
+sample.jpg
 depth-preview.*
 
 # Editors and operating systems
