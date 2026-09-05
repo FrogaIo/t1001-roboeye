@@ -16,6 +16,7 @@ from config import (
     CLEAR_FRAMES_REQUIRED,
     DARK_FRAME_MEAN_THRESHOLD,
     DEFAULT_CAMERA_PITCH_DEGREES,
+    DEPTH_MAX_AGE_SECONDS,
     DISPLAY_NAMES,
 )
 from detector import (
@@ -24,8 +25,10 @@ from detector import (
     DepthOccupancyEstimator,
     ObjectDetector,
     choose_route,
+    depth_lane_occupancy,
     depth_lane_scores,
     draw_result,
+    fuse_lane_occupancy,
     lane_occupancy,
     perspective_for_pitch,
 )
@@ -114,18 +117,41 @@ def process_frame(
     perspective = perspective_for_pitch(pitch_degrees)
     too_dark = float(frame.mean()) < DARK_FRAME_MEAN_THRESHOLD
     detections = [] if too_dark else detector.detect(frame, perspective)
-    depth = depth_tracker.observe(frame)
+    depth = None if too_dark else depth_tracker.observe(frame)
     depth_obstacles: list[DepthObstacle] = []
     if depth is not None:
         try:
             depth_obstacles = depth_estimator.update(depth, width, height, perspective)
         except Exception:
             logger.exception("[depth] occupancy failed; continuing YOLO-only")
-    lanes = lane_occupancy(detections)
+
+    yolo_lanes = lane_occupancy(detections)
+    depth_fresh = (
+        depth is not None
+        and depth.age_seconds(time.monotonic()) <= DEPTH_MAX_AGE_SECONDS
+    )
+    depth_lanes = depth_lane_occupancy(depth_obstacles) if depth_fresh else {}
+    lanes = fuse_lane_occupancy(yolo_lanes, depth_lanes)
     route = "BLOCKED" if too_dark else choose_route(lanes)
 
     dangerous = [item for item in detections if item.dangerous]
-    danger_reason = "camera_dark" if too_dark else (dangerous[0].label if dangerous else None)
+    yolo_reason = dangerous[0].label if dangerous else None
+    depth_center = depth_lanes.get("center", False)
+    if too_dark:
+        danger_reason = "camera_dark"
+        source = None
+    elif depth_center and yolo_reason:
+        danger_reason = yolo_reason
+        source = "depth + yolo"
+    elif depth_center:
+        danger_reason = "unknown_obstacle"
+        source = "depth"
+    elif yolo_reason:
+        danger_reason = yolo_reason
+        source = "yolo"
+    else:
+        danger_reason = None
+        source = None
     decision = decision_filter.update(danger_reason)
     processed = draw_result(frame, detections, decision, lanes, route, perspective)
 
@@ -138,6 +164,7 @@ def process_frame(
         "state": decision.state,
         "reason": decision.reason,
         "reason_display": DISPLAY_NAMES.get(decision.reason, "ZONE CLEAR"),
+        "source": source,
         "route": route,
         "lanes": lanes,
         "inference_ms": round((time.perf_counter() - started_at) * 1000),

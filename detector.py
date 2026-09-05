@@ -381,6 +381,16 @@ def depth_lane_scores(obstacles: list[DepthObstacle]) -> dict[str, float]:
     }
 
 
+def fuse_lane_occupancy(
+    yolo_lanes: dict[str, bool], depth_lanes: dict[str, bool]
+) -> dict[str, bool]:
+    """Depth occupancy decides safety, YOLO only adds more occupied lanes."""
+    return {
+        lane: yolo_lanes.get(lane, False) or depth_lanes.get(lane, False)
+        for lane in LANES
+    }
+
+
 def choose_route(lanes: dict[str, bool]) -> str:
     if not lanes["center"]:
         return "STRAIGHT"

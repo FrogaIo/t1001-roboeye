@@ -34,6 +34,7 @@ DISPLAY_NAMES = {
     "cart": "CART",
     "bin": "BIN",
     "camera_dark": "CAMERA DARK",
+    "unknown_obstacle": "UNKNOWN OBSTACLE",
 }
 
 CONFIDENCE_THRESHOLD = 0.18
@@ -59,6 +60,8 @@ DEPTH_RESIDUAL_MADS = 2.5
 DEPTH_RESIDUAL_MIN_DELTA = 0.25
 DEPTH_MIN_COMPONENT_CELLS = 12
 DEPTH_MIN_COMPONENT_SCORE = 1.5
+# A depth map older than this must never be treated as fresh evidence.
+DEPTH_MAX_AGE_SECONDS = 1.0
 
 MIN_CLOSE_HEIGHT_RATIO = 0.18
 # Perspective is derived from the phone accelerometer. The fallback occupies
