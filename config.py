@@ -46,6 +46,19 @@ MAX_DETECTIONS = 24
 # depth_smoke.py). Never interpret them as metres.
 DEPTH_MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 DEPTH_INTERVAL_SECONDS = 0.5
+DEPTH_GRID_ROWS = 90
+DEPTH_GRID_COLS = 160
+DEPTH_EMA_ALPHA = 0.35
+# Floor background per trapezoid row is the low percentile across the corridor
+# width, stabilized over time so a transient box cannot poison the profile.
+DEPTH_FLOOR_PERCENTILE = 35
+DEPTH_FLOOR_PROFILE_ALPHA = 0.2
+# Residual thresholds are relative (MAD units) plus a small absolute epsilon
+# that keeps a perfectly flat synthetic surface free of false obstacles.
+DEPTH_RESIDUAL_MADS = 2.5
+DEPTH_RESIDUAL_MIN_DELTA = 0.25
+DEPTH_MIN_COMPONENT_CELLS = 12
+DEPTH_MIN_COMPONENT_SCORE = 1.5
 
 MIN_CLOSE_HEIGHT_RATIO = 0.18
 # Perspective is derived from the phone accelerometer. The fallback occupies

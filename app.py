@@ -20,8 +20,11 @@ from config import (
 )
 from detector import (
     DecisionFilter,
+    DepthObstacle,
+    DepthOccupancyEstimator,
     ObjectDetector,
     choose_route,
+    depth_lane_scores,
     draw_result,
     lane_occupancy,
     perspective_for_pitch,
@@ -45,6 +48,7 @@ latest_processed_at = 0.0
 
 detector = ObjectDetector()
 depth_tracker = DepthTracker()
+depth_estimator = DepthOccupancyEstimator()
 journal = EventJournal(ROOT)
 
 
@@ -111,6 +115,12 @@ def process_frame(
     too_dark = float(frame.mean()) < DARK_FRAME_MEAN_THRESHOLD
     detections = [] if too_dark else detector.detect(frame, perspective)
     depth = depth_tracker.observe(frame)
+    depth_obstacles: list[DepthObstacle] = []
+    if depth is not None:
+        try:
+            depth_obstacles = depth_estimator.update(depth, width, height, perspective)
+        except Exception:
+            logger.exception("[depth] occupancy failed; continuing YOLO-only")
     lanes = lane_occupancy(detections)
     route = "BLOCKED" if too_dark else choose_route(lanes)
 
@@ -146,6 +156,21 @@ def process_frame(
                 int(depth.age_seconds(time.monotonic()) * 1000) if depth else None
             ),
             "inference_ms": depth.inference_ms if depth else None,
+            "lane_scores": depth_lane_scores(depth_obstacles),
+            "obstacles": [
+                {
+                    "lane": item.lane,
+                    "score": item.score,
+                    "area_cells": item.area_cells,
+                    "box": [
+                        item.box[0] / width,
+                        item.box[1] / height,
+                        item.box[2] / width,
+                        item.box[3] / height,
+                    ],
+                }
+                for item in depth_obstacles
+            ],
         },
         "detections": [
             {

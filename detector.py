@@ -17,6 +17,15 @@ from config import (
     CORRIDOR_TOP_HALF_WIDTH_DOWN,
     CORRIDOR_TOP_HALF_WIDTH_UPRIGHT,
     DEFAULT_CAMERA_PITCH_DEGREES,
+    DEPTH_EMA_ALPHA,
+    DEPTH_FLOOR_PERCENTILE,
+    DEPTH_FLOOR_PROFILE_ALPHA,
+    DEPTH_GRID_COLS,
+    DEPTH_GRID_ROWS,
+    DEPTH_MIN_COMPONENT_CELLS,
+    DEPTH_MIN_COMPONENT_SCORE,
+    DEPTH_RESIDUAL_MADS,
+    DEPTH_RESIDUAL_MIN_DELTA,
     DISPLAY_NAMES,
     INFERENCE_SIZE,
     IOU_THRESHOLD,
@@ -26,6 +35,7 @@ from config import (
     MIN_CLOSE_HEIGHT_RATIO,
     MODEL_PATH,
 )
+from depth_detector import DepthObservation
 
 
 PROMPTS = [prompt for prompts in CLASS_PROMPTS.values() for prompt in prompts]
@@ -211,6 +221,162 @@ class ObjectDetector:
 def lane_occupancy(detections: list[Detection]) -> dict[str, bool]:
     return {
         lane: any(item.close and item.lane == lane for item in detections)
+        for lane in LANES
+    }
+
+
+@dataclass(frozen=True)
+class DepthObstacle:
+    """A connected blob closer than the floor plane of its image row.
+
+    score is a normalized depth residual in MAD units, not metres."""
+
+    lane: str
+    score: float
+    area_cells: int
+    box: tuple[int, int, int, int]
+    ground: tuple[int, int]
+
+
+class DepthOccupancyEstimator:
+    """Derives obstacle blobs in the perspective corridor from relative depth.
+
+    The floor background of each corridor row is estimated with a low
+    percentile across the corridor width and stabilized over time, so any
+    surface noticeably closer than that plane becomes an obstacle. Higher
+    depth values mean closer surfaces (verified in depth_smoke.py)."""
+
+    def __init__(self) -> None:
+        self._ema: np.ndarray | None = None
+        self._floor_profile: np.ndarray | None = None
+        self._last_created_at: float | None = None
+        self._last_obstacles: list[DepthObstacle] = []
+
+    def update(
+        self,
+        observation: DepthObservation,
+        width: int,
+        height: int,
+        perspective: Perspective,
+    ) -> list[DepthObstacle]:
+        if observation.created_at == self._last_created_at:
+            return self._last_obstacles
+        self._last_created_at = observation.created_at
+
+        grid = cv2.resize(
+            observation.depth,
+            (DEPTH_GRID_COLS, DEPTH_GRID_ROWS),
+            interpolation=cv2.INTER_LINEAR,
+        ).astype(np.float32)
+        grid = self._sanitize(grid)
+        if self._ema is None or self._ema.shape != grid.shape:
+            self._ema = grid.copy()
+        else:
+            self._ema = DEPTH_EMA_ALPHA * grid + (1.0 - DEPTH_EMA_ALPHA) * self._ema
+
+        trapezoid = np.zeros((DEPTH_GRID_ROWS, DEPTH_GRID_COLS), dtype=bool)
+        row_bounds: list[tuple[int, int, int]] = []
+        for row in range(DEPTH_GRID_ROWS):
+            y = (row + 0.5) / DEPTH_GRID_ROWS * height
+            if y < height * perspective.zone_top:
+                continue
+            left, right = corridor_edges(width, height, y, perspective)
+            col1 = int(np.clip(left / width * DEPTH_GRID_COLS, 0, DEPTH_GRID_COLS))
+            col2 = int(np.clip(right / width * DEPTH_GRID_COLS, 0, DEPTH_GRID_COLS))
+            if col2 <= col1:
+                continue
+            trapezoid[row, col1:col2] = True
+            row_bounds.append((row, col1, col2))
+        if not row_bounds:
+            self._last_obstacles = []
+            return self._last_obstacles
+
+        profile = np.full(DEPTH_GRID_ROWS, np.nan, dtype=np.float32)
+        for row, col1, col2 in row_bounds:
+            strip = self._ema[row, col1:col2]
+            profile[row] = np.percentile(strip, DEPTH_FLOOR_PERCENTILE)
+        if self._floor_profile is None or self._floor_profile.shape != profile.shape:
+            self._floor_profile = profile
+        else:
+            self._floor_profile = (
+                DEPTH_FLOOR_PROFILE_ALPHA * profile
+                + (1.0 - DEPTH_FLOOR_PROFILE_ALPHA) * self._floor_profile
+            )
+
+        residual = self._ema - self._floor_profile[:, None]
+        values = residual[trapezoid]
+        finite = values[np.isfinite(values)]
+        if finite.size == 0:
+            self._last_obstacles = []
+            return self._last_obstacles
+        median = float(np.median(finite))
+        mad = float(np.median(np.abs(finite - median)))
+        delta = max(
+            DEPTH_RESIDUAL_MIN_DELTA,
+            DEPTH_RESIDUAL_MADS * 1.4826 * mad,
+        )
+        denom = max(1.4826 * mad, 1e-6)
+        normalized = (residual - median) / denom
+
+        mask = trapezoid & np.isfinite(residual) & (residual - median > delta)
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+        obstacles: list[DepthObstacle] = []
+        labels = int(mask.max())
+        if labels:
+            num_labels, components = cv2.connectedComponents(mask, connectivity=8)
+            for label in range(1, num_labels):
+                ys, xs = np.where(components == label)
+                if ys.size < DEPTH_MIN_COMPONENT_CELLS:
+                    continue
+                score = float(np.mean(normalized[ys, xs]))
+                if score < DEPTH_MIN_COMPONENT_SCORE:
+                    continue
+                bottom = int(ys.max())
+                ground_x = float(np.mean(xs[ys == bottom]))
+                x1 = int(xs.min() / DEPTH_GRID_COLS * width)
+                x2 = int((xs.max() + 1) / DEPTH_GRID_COLS * width)
+                y1 = int(ys.min() / DEPTH_GRID_ROWS * height)
+                y2 = int((bottom + 1) / DEPTH_GRID_ROWS * height)
+                ground = (
+                    int(ground_x / DEPTH_GRID_COLS * width),
+                    int((bottom + 0.5) / DEPTH_GRID_ROWS * height),
+                )
+                lane = projected_lane(width, height, ground[0], ground[1], perspective)
+                if lane == "outside":
+                    continue
+                obstacles.append(
+                    DepthObstacle(
+                        lane=lane,
+                        score=round(score, 2),
+                        area_cells=int(ys.size),
+                        box=(x1, y1, x2, y2),
+                        ground=ground,
+                    )
+                )
+        self._last_obstacles = obstacles
+        return self._last_obstacles
+
+    @staticmethod
+    def _sanitize(grid: np.ndarray) -> np.ndarray:
+        finite = np.isfinite(grid)
+        if finite.all():
+            return grid
+        fill = float(np.nanmedian(grid[finite])) if finite.any() else 0.0
+        grid = grid.copy()
+        grid[~finite] = fill
+        return grid
+
+
+def depth_lane_occupancy(obstacles: list[DepthObstacle]) -> dict[str, bool]:
+    return {lane: any(item.lane == lane for item in obstacles) for lane in LANES}
+
+
+def depth_lane_scores(obstacles: list[DepthObstacle]) -> dict[str, float]:
+    return {
+        lane: max((item.score for item in obstacles if item.lane == lane), default=0.0)
         for lane in LANES
     }
 
